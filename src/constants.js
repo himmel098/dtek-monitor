@@ -1,15 +1,4 @@
-import path from "node:path"
-
-export const {
-  TELEGRAM_BOT_TOKEN,
-  TELEGRAM_CHAT_ID,
-  REGION,
-  CITY,
-  STREET,
-  HOUSE,
-} = process.env
-
-export const shutdownsPages = {
+export const SHUTDOWNS_PAGES = {
   k: "https://www.dtek-kem.com.ua/ua/shutdowns",
   kr: "https://www.dtek-krem.com.ua/ua/shutdowns",
   dn: "https://www.dtek-dnem.com.ua/ua/shutdowns",
@@ -17,10 +6,20 @@ export const shutdownsPages = {
   d: "https://www.dtek-dem.com.ua/ua/shutdowns",
 }
 
-export const SHUTDOWNS_PAGE =
-  shutdownsPages[String(REGION).toLocaleLowerCase()] ?? shutdownsPages["kr"]
+export const TIME_ZONE = "Europe/Kyiv"
+export const NAVIGATION_TIMEOUT_MS = 45_000
+export const ACTION_TIMEOUT_MS = 15_000
+export const RETRIES_MAX_COUNT = 2
+export const RETRIES_TIMEOUT_MS = 5_000
+export const MILLISECONDS_PER_SECOND = 1_000
+export const MINUTES_PER_HOUR = 60
+export const HALF_HOUR_MINUTES = 30
 
-export const LAST_MESSAGE_FILE = path.resolve("artifacts", `last-message.json`)
-
-export const RETRIES_MAX_COUNT = 5
-export const RETRIES_TIMEOUT = 5000
+export class MonitorError extends Error {
+  constructor(code, message, details = {}) {
+    super(message)
+    this.name = "MonitorError"
+    this.code = code
+    this.details = details
+  }
+}

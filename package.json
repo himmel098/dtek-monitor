@@ -1,12 +1,13 @@
 {
   "name": "dtek-monitor",
   "version": "2.1.0",
-  "description": "DTEK power outages monitor",
+  "description": "DTEK outage schedule JSON CLI for external agents",
   "type": "module",
   "main": "src/monitor.js",
   "scripts": {
-    "start": "node --env-file=.env ./src/monitor.js",
-    "watch": "node --env-file=.env --watch ./src/monitor.js"
+    "start": "node ./src/monitor.js",
+    "watch": "node --watch ./src/monitor.js",
+    "test": "node --test"
   },
   "dependencies": {
     "playwright": "^1.55.0"
@@ -18,8 +19,8 @@
     "monitor",
     "power",
     "outages",
-    "bot",
-    "telegram",
+    "json",
+    "hermes",
     "dtek"
   ],
   "author": "Bohdan Yatsenko",

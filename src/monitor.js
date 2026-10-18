@@ -1,232 +1,172 @@
+import { setTimeout as delay } from "node:timers/promises"
 import { chromium } from "playwright"
-
+import { loadConfig } from "./config.js"
+import { buildResult, selectName } from "./helpers.js"
+import { saveWithComparison } from "./state.js"
 import {
-  TELEGRAM_BOT_TOKEN,
-  TELEGRAM_CHAT_ID,
-  REGION,
-  CITY,
-  STREET,
-  HOUSE,
-  SHUTDOWNS_PAGE,
+  ACTION_TIMEOUT_MS,
+  NAVIGATION_TIMEOUT_MS,
   RETRIES_MAX_COUNT,
-  RETRIES_TIMEOUT,
+  RETRIES_TIMEOUT_MS,
+  TIME_ZONE,
+  MonitorError,
 } from "./constants.js"
 
-import {
-  capitalize,
-  checkIsNight,
-  deleteLastMessage,
-  getCurrentTime,
-  loadLastMessage,
-  saveLastMessage,
-} from "./helpers.js"
-
-let getInfoRetries = 0
-let sendNotificationRetries = 0
-
-async function getInfo() {
-  console.log("🌀 Getting info...")
-
-  const browser = await chromium.launch({ headless: true })
-
-  try {
-    const browserPage = await browser.newPage()
-    await browserPage.goto(SHUTDOWNS_PAGE, {
-      waitUntil: "load",
+async function chooseSuggestion(page, field, value) {
+  await page.locator(`#discon_form #${field}`).fill(value)
+  const options = page.locator(`#discon_form #${field}autocomplete-list > div`)
+  await options.first().waitFor({ state: "visible" })
+  const names = await options
+    .locator('input[type="hidden"]')
+    .evaluateAll((inputs) => inputs.map((input) => input.value))
+  const index = names.indexOf(value)
+  if (index < 0)
+    throw new MonitorError("ADDRESS_NOT_FOUND", `${field}: ${value}`, {
+      candidates: names,
     })
+  await options.nth(index).click()
+}
 
-    const csrfTokenTag = await browserPage.waitForSelector(
-      'meta[name="csrf-token"]',
-      { state: "attached" }
+async function getInfo(config) {
+  const browser = await chromium.launch({ headless: !config.headed })
+  try {
+    const page = await browser.newPage({
+      locale: "uk-UA",
+      timezoneId: TIME_ZONE,
+    })
+    page.setDefaultTimeout(ACTION_TIMEOUT_MS)
+    page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS)
+    const notices = []
+    // The notice may appear after DOMContentLoaded. Handle it when it blocks an action.
+    await page.addLocatorHandler(
+      page.locator("#modal-attention.is-open .modal__overlay"),
+      async () => {
+        const attention = page.locator("#modal-attention")
+        notices.push((await attention.innerText()).trim())
+        await attention.locator("button[data-micromodal-close]").click()
+      }
     )
-    const csrfToken = await csrfTokenTag.getAttribute("content")
-
-    const info = await browserPage.evaluate(
-      async ({ REGION, CITY, STREET, csrfToken }) => {
-        const formData = new URLSearchParams()
-        formData.append("method", "getHomeNum")
-
-        if (REGION !== "k") {
-          formData.append("data[0][name]", "city")
-          formData.append("data[0][value]", CITY)
-        }
-
-        formData.append("data[1][name]", "street")
-        formData.append("data[1][value]", STREET)
-        formData.append("data[2][name]", "updateFact")
-        formData.append("data[2][value]", new Date().toLocaleString("uk-UA"))
-
-        const response = await fetch("/ua/ajax", {
-          method: "POST",
-          headers: {
-            "x-requested-with": "XMLHttpRequest",
-            "x-csrf-token": csrfToken,
-          },
-          body: formData,
-        })
-        return await response.json()
-      },
-      { REGION, CITY, STREET, csrfToken }
+    await page.goto(config.url, { waitUntil: "domcontentloaded" })
+    await page.waitForFunction(
+      () =>
+        typeof DisconSchedule !== "undefined" &&
+        DisconSchedule.preset &&
+        DisconSchedule.fact &&
+        DisconSchedule.ajax.url
     )
-
-    if (!info?.data) throw Error("power outage info missed")
-
-    console.log("✅ Getting info finished.")
-    return info
-  } catch (error) {
-    console.error(`❌ Getting info failed: ${error.message}.`)
+    const streets = await page.evaluate(() => DisconSchedule.streets)
+    if (!streets || typeof streets !== "object")
+      throw new MonitorError("INVALID_RESPONSE", "Address directory missing.")
+    const city =
+      config.region === "k" && !config.city
+        ? selectName("Київ", Object.keys(streets), "city")
+        : selectName(config.city, Object.keys(streets), "city")
+    const street = selectName(config.street, streets[city], "street")
+    const cityInput = page.locator("#discon_form #city")
+    if ((await cityInput.isVisible()) && (await cityInput.isEnabled())) {
+      await chooseSuggestion(page, "city", city)
+    }
+    const responsePromise = page.waitForResponse((response) => {
+      const request = response.request()
+      return (
+        new URL(response.url()).pathname === "/ua/ajax" &&
+        request.method() === "POST" &&
+        new URLSearchParams(request.postData() ?? "").get("method") ===
+          "getHomeNum"
+      )
+    })
+    // Attach the rejection handler before clicking, even if the UI action fails.
+    responsePromise.catch(() => {})
+    await chooseSuggestion(page, "street", street)
+    const networkResponse = await responsePromise
+    if (!networkResponse.ok())
+      throw new MonitorError(
+        "HTTP_ERROR",
+        `DTEK HTTP ${networkResponse.status()}`
+      )
+    let response
+    try {
+      response = await networkResponse.json()
+    } catch {
+      throw new MonitorError(
+        "INVALID_RESPONSE",
+        "DTEK returned non-JSON content (possible verification page)."
+      )
+    }
+    if (response.result !== true)
+      throw new MonitorError("INVALID_RESPONSE", "Address request failed.")
+    await page.waitForFunction(
+      () =>
+        !document
+          .querySelector("#discon_form #street")
+          .closest(".discon-input-wrapper")
+          .classList.contains("preloader-spinner")
+    )
+    const matchedHouse = Object.keys(response.data ?? {}).find(
+      (key) =>
+        key.trim().toLocaleLowerCase("uk") ===
+        config.house.toLocaleLowerCase("uk")
+    )
+    if (matchedHouse) await chooseSuggestion(page, "house_num", matchedHouse)
+    const snapshot = await page.evaluate(() => ({
+      preset: DisconSchedule.preset,
+      fact: DisconSchedule.fact,
+    }))
+    return {
+      ...buildResult({
+        config,
+        address: { city, street },
+        response,
+        preset: response.preset ?? snapshot.preset,
+        fact: response.fact ?? snapshot.fact,
+      }),
+      notices,
+    }
   } finally {
     await browser.close()
   }
-
-  if (getInfoRetries < RETRIES_MAX_COUNT) {
-    console.log("🌀 Try getting info again...")
-    await new Promise((resolve) => setTimeout(resolve, RETRIES_TIMEOUT))
-    getInfoRetries++
-    return await getInfo()
-  }
-
-  throw Error(`❌ Getting info failed after ${RETRIES_MAX_COUNT} retries.`)
-}
-
-function checkIsOutage(info) {
-  console.log("🌀 Checking power outage...")
-
-  const house = info.data[HOUSE]
-  if (!house) throw Error(`❌ House ${HOUSE} not found.`)
-
-  const { sub_type, start_date, end_date, type } = house
-  const isOutageDetected =
-    sub_type !== "" || start_date !== "" || end_date !== "" || type !== ""
-
-  isOutageDetected
-    ? console.log("🚨 Power outage detected!")
-    : console.log("⚡️ No power outage!")
-
-  return isOutageDetected
-}
-
-function checkIsScheduled(info) {
-  console.log("🌀 Checking whether power outage scheduled...")
-
-  const { sub_type } = info?.data?.[HOUSE] || {}
-  const isScheduled =
-    !sub_type.toLowerCase().includes("авар") &&
-    !sub_type.toLowerCase().includes("екст")
-
-  isScheduled
-    ? console.log("🗓️ Power outage scheduled!")
-    : console.log("⚠️ Power outage not scheduled!")
-
-  return isScheduled
-}
-
-function generateMessage(info) {
-  console.log("🌀 Generating message...")
-
-  const { sub_type, start_date, end_date } = info?.data?.[HOUSE] || {}
-  const { updateTimestamp } = info || {}
-  const update = updateTimestamp?.split(" ").reverse().join(" ")
-
-  const reason = capitalize(sub_type)
-  const begin = start_date.split(" ")[0]
-  const end = end_date.split(" ")[0]
-
-  const outageText = [
-    `🪫 <code>${begin} — ${end}</code>`,
-    "",
-    `⚠️ <i>${reason}.</i>`,
-  ].join("\n")
-
-  const text = [
-    "⚡️ <b>Зафіксовано відключення:</b>",
-    outageText,
-    "",
-    `📢 <i>${update}</i>`,
-    `🤖 <i>${getCurrentTime()}</i>`,
-  ].join("\n")
-
-  return { text, outageText }
-}
-
-async function sendNotification({ text, outageText }) {
-  if (!TELEGRAM_BOT_TOKEN) throw Error("❌ Missing telegram bot token.")
-  if (!TELEGRAM_CHAT_ID) throw Error("❌ Missing telegram chat id.")
-
-  console.log("🌀 Sending notification...")
-
-  const lastMessage = loadLastMessage() || {}
-  const isOutageChanged = lastMessage.outageText !== outageText
-  const isEdit = Boolean(lastMessage.message_id) && !isOutageChanged
-  const isReply = Boolean(lastMessage.message_id) && isOutageChanged
-
-  try {
-    const response = await fetch(
-      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${
-        isEdit ? "editMessageText" : "sendMessage"
-      }`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: TELEGRAM_CHAT_ID,
-          text,
-          parse_mode: "HTML",
-          disable_notification: checkIsNight(),
-          message_id: isEdit ? lastMessage.message_id : undefined,
-          reply_parameters: isReply
-            ? {
-                message_id: lastMessage.message_id,
-                allow_sending_without_reply: true,
-              }
-            : undefined,
-        }),
-      }
-    )
-
-    const data = await response.json()
-
-    if (data.description?.includes("not modified")) {
-      console.log("🟡 Notification not changed.")
-      return
-    }
-    if (!data.ok) throw Error(data.description)
-
-    saveLastMessage({ ...data.result, outageText })
-
-    console.log("🟢 Notification sent.")
-    return
-  } catch (error) {
-    console.error(`❌ Sending notification failed: ${error.message}.`)
-    deleteLastMessage()
-  }
-
-  if (sendNotificationRetries < RETRIES_MAX_COUNT) {
-    console.log("🌀 Try sending notification again...")
-    await new Promise((resolve) => setTimeout(resolve, RETRIES_TIMEOUT))
-    sendNotificationRetries++
-    return await sendNotification({ text, outageText })
-  }
-
-  throw Error(
-    `❌ Sending notification failed after ${RETRIES_MAX_COUNT} retries.`
-  )
 }
 
 async function run() {
-  const info = await getInfo()
-  const isOutage = checkIsOutage(info)
-
-  if (!isOutage) return
-
-  const isScheduled = checkIsScheduled(info)
-  if (isOutage && !isScheduled) {
-    const message = generateMessage(info)
-    await sendNotification(message)
+  const config = loadConfig()
+  if (config.help) {
+    console.log(
+      JSON.stringify({
+        usage:
+          "node src/monitor.js --region o --city Одеса --street 'вул. Назва' --house 1",
+        options: ["--region", "--city", "--street", "--house", "--headed"],
+        env: ["REGION", "CITY", "STREET", "HOUSE"],
+      })
+    )
+    return
+  }
+  for (let attempt = 0; attempt <= RETRIES_MAX_COUNT; attempt++) {
+    try {
+      const result = saveWithComparison(await getInfo(config))
+      process.stdout.write(`${JSON.stringify(result)}\n`)
+      return
+    } catch (error) {
+      console.error(
+        `Getting info failed (attempt ${attempt + 1}): ${error.message}`
+      )
+      if (error instanceof MonitorError || attempt === RETRIES_MAX_COUNT)
+        throw error
+      await delay(RETRIES_TIMEOUT_MS)
+    }
   }
 }
 
 run().catch((error) => {
+  const result = {
+    schemaVersion: 1,
+    result: false,
+    error: {
+      code: error.code ?? "FETCH_FAILED",
+      message: error.message,
+      ...(error.details ?? {}),
+    },
+  }
   console.error(error.message)
+  process.stdout.write(`${JSON.stringify(result)}\n`)
   process.exitCode = 1
 })
