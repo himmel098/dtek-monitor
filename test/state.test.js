@@ -128,6 +128,35 @@ test("timestamps, labels, group order and equivalent interval splits do not coun
   assert.equal(again.comparison.changed, false)
 })
 
+test("stabilization current-outage changes do not count as schedule changes", (t) => {
+  const directory = stateDirectory(t)
+  const previous = result()
+  previous.currentOutage = {
+    reported: true,
+    data: {
+      sub_type: "Стабілізаційне відключення (Згідно графіку погодинних відключень)",
+      start_date: "20:36 18.10.2026",
+      end_date: "00:00 19.10.2026",
+      type: "2",
+    },
+  }
+  saveWithComparison(previous, directory)
+
+  const current = result()
+  current.currentOutage = {
+    reported: true,
+    data: {
+      sub_type: "Стабілізаційне відключення (Згідно графіку погодинних відключень)",
+      start_date: "21:00 18.10.2026",
+      end_date: "23:30 18.10.2026",
+      type: "2",
+    },
+  }
+  const output = saveWithComparison(current, directory)
+  assert.equal(output.comparison.status, "unchanged")
+  assert.equal(output.comparison.changed, false)
+})
+
 test("changed intervals, groups, dates, availability, outage records and flags are detected", async (t) => {
   const edits = {
     interval: (current) => {

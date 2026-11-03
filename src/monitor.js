@@ -28,7 +28,12 @@ async function chooseSuggestion(page, field, value) {
 }
 
 async function getInfo(config) {
-  const browser = await chromium.launch({ headless: !config.headed })
+  const browser = await chromium.launch({
+    headless: !config.headed,
+    ...(process.env.CHROMIUM_PATH
+      ? { executablePath: process.env.CHROMIUM_PATH }
+      : {}),
+  })
   try {
     const page = await browser.newPage({
       locale: "uk-UA",

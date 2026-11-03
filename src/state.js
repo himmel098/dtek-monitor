@@ -72,18 +72,24 @@ function intervalsForComparison(intervals = []) {
   return normalized
 }
 
+function currentOutageForComparison(currentOutage) {
+  const data = currentOutage?.data ?? {}
+  const type = String(data.sub_type ?? "").toLocaleLowerCase("uk")
+  // Scheduled stabilization outages mirror the planned schedule, not a separate event.
+  if (type.includes("стабілізац")) return null
+  return {
+    reported: currentOutage?.reported ?? false,
+    data: Object.fromEntries(
+      Object.entries(data).filter(([key]) => key !== "sub_type_reason")
+    ),
+  }
+}
+
 function scheduleForComparison(result) {
   return stableJson({
     timeZone: result.timeZone,
     flags: result.flags,
-    currentOutage: {
-      reported: result.currentOutage.reported,
-      data: Object.fromEntries(
-        Object.entries(result.currentOutage.data).filter(
-          ([key]) => key !== "sub_type_reason"
-        )
-      ),
-    },
+    currentOutage: currentOutageForComparison(result.currentOutage),
     groups: result.groups
       .map((group) => ({
         id: group.id,
