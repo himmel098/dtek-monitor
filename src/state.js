@@ -88,25 +88,19 @@ function currentOutageForComparison(currentOutage) {
 function scheduleForComparison(result) {
   return stableJson({
     timeZone: result.timeZone,
-    flags: result.flags,
+    scheduleDate: result.scheduleDate,
     currentOutage: currentOutageForComparison(result.currentOutage),
     groups: result.groups
       .map((group) => ({
         id: group.id,
         daily: group.daily
+          .filter((day) => day.date === result.scheduleDate)
           .map((day) => ({
             date: day.date,
             status: day.status,
             intervals: intervalsForComparison(day.intervals),
           }))
           .sort((left, right) => left.date.localeCompare(right.date)),
-        weekly: group.weekly
-          .map((day) => ({
-            weekday: day.weekday,
-            status: day.status,
-            intervals: intervalsForComparison(day.intervals),
-          }))
-          .sort((left, right) => left.weekday - right.weekday),
       }))
       .sort((left, right) => left.id.localeCompare(right.id)),
   })

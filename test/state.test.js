@@ -41,6 +41,7 @@ function result() {
       matchedHouse: "5А",
     },
     retrievedAt: "2026-10-18T12:00:00.000Z",
+    scheduleDate: "2026-10-18",
     updatedAt: {
       address: "15:00 18.10.2026",
       daily: "18.10.2026 15:00",
@@ -174,9 +175,6 @@ test("changed intervals, groups, dates, availability, outage records and flags a
     outage: (current) => {
       current.currentOutage.data.end_date = "20:00 18.10.2026"
     },
-    flags: (current) => {
-      current.flags.showTableFact = false
-    },
   }
   for (const [name, edit] of Object.entries(edits)) {
     await t.test(name, (subtest) => {
@@ -190,6 +188,21 @@ test("changed intervals, groups, dates, availability, outage records and flags a
       assert.deepEqual(output.groups, current.groups)
     })
   }
+})
+
+test("weekly forecast and display flags do not count as confirmed daily changes", (t) => {
+  const directory = stateDirectory(t)
+  saveWithComparison(result(), directory)
+  const current = result()
+  current.flags.showTableFact = false
+  current.groups[0].weekly[0].intervals[0].status = "off"
+  current.groups[0].daily.push({
+    date: "2026-10-19",
+    status: "available",
+    intervals: [{ start: "00:00", end: "24:00", status: "off" }],
+  })
+  const output = saveWithComparison(current, directory)
+  assert.equal(output.comparison.status, "unchanged")
 })
 
 test("each house has independent state, with case and whitespace normalized", (t) => {
