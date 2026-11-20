@@ -1,0 +1,69 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Scheduled DTEK outage notifications
+Parameters:
+
+  ScheduleState: { Type: String, Default: DISABLED, AllowedValues: [DISABLED, ENABLED] }
+  RegionCode: { Type: String, AllowedValues: [o, k, kr, dn, d] }
+  City: { Type: String, Default: '', NoEcho: true }
+  Street: { Type: String, NoEcho: true, MinLength: 1 }
+  House: { Type: String, NoEcho: true, MinLength: 1 }
+  TelegramChatId: { Type: String, NoEcho: true, MinLength: 1 }
+  TelegramBotToken: { Type: String, NoEcho: true, AllowedPattern: '[0-9]+:[A-Za-z0-9_-]+' }
+Resources:
+  Snapshot:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PROVISIONED
+      ProvisionedThroughput: { ReadCapacityUnits: 5, WriteCapacityUnits: 20 }
+      AttributeDefinitions: [{ AttributeName: id, AttributeType: S }]
+      KeySchema: [{ AttributeName: id, KeyType: HASH }]
+  Monitor:
+    Type: AWS::Serverless::Function
+    Properties:
+      InlineCode: |
+        exports.handler = async () => { throw new Error('Upload function.zip before enabling the schedule') }
+      Handler: index.handler
+      Runtime: nodejs22.x
+      Architectures: [x86_64]
+
+      MemorySize: 2048
+      Timeout: 75
+      ReservedConcurrentExecutions: 1
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+        MaximumEventAgeInSeconds: 120
+      Environment:
+        Variables:
+          REGION: !Ref RegionCode
+          CITY: !Ref City
+          STREET: !Ref Street
+          HOUSE: !Ref House
+          TELEGRAM_CHAT_ID: !Ref TelegramChatId
+          TELEGRAM_BOT_TOKEN: !Ref TelegramBotToken
+          DTEK_TABLE: !Ref Snapshot
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: ['dynamodb:GetItem', 'dynamodb:PutItem']
+              Resource: !GetAtt Snapshot.Arn
+      Events:
+        Every20Minutes:
+          Type: ScheduleV2
+          Properties:
+            State: !Ref ScheduleState
+            ScheduleExpression: cron(0,20,40 * * * ? *)
+            ScheduleExpressionTimezone: UTC
+            FlexibleTimeWindow: { Mode: 'OFF' }
+            RetryPolicy: { MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 120 }
+            Input: '{}'
+  MonitorLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${Monitor}'
+      RetentionInDays: 7
+Outputs:
+  FunctionName: { Value: !Ref Monitor }
+  TableName: { Value: !Ref Snapshot }
