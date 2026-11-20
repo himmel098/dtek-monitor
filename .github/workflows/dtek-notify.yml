@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   notify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v7
@@ -25,7 +25,7 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps --only-shell chromium
       - name: Restore encrypted baseline
         id: baseline
         uses: actions/cache/restore@v5
