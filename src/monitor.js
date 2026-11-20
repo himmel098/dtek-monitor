@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises"
+import { pathToFileURL } from "node:url"
 import { chromium } from "playwright"
 import { loadConfig } from "./config.js"
 import { buildResult, selectName } from "./helpers.js"
@@ -132,6 +133,18 @@ async function getInfo(config) {
   }
 }
 
+export async function collect(config) {
+  for (let attempt = 0; attempt <= RETRIES_MAX_COUNT; attempt++) {
+    try {
+      return await getInfo(config)
+    } catch (error) {
+      console.error(`Getting info failed (attempt ${attempt + 1}): ${error.message}`)
+      if (error instanceof MonitorError || attempt === RETRIES_MAX_COUNT) throw error
+      await delay(RETRIES_TIMEOUT_MS)
+    }
+  }
+}
+
 async function run() {
   const config = loadConfig()
   if (config.help) {
@@ -145,23 +158,11 @@ async function run() {
     )
     return
   }
-  for (let attempt = 0; attempt <= RETRIES_MAX_COUNT; attempt++) {
-    try {
-      const result = saveWithComparison(await getInfo(config))
-      process.stdout.write(`${JSON.stringify(result)}\n`)
-      return
-    } catch (error) {
-      console.error(
-        `Getting info failed (attempt ${attempt + 1}): ${error.message}`
-      )
-      if (error instanceof MonitorError || attempt === RETRIES_MAX_COUNT)
-        throw error
-      await delay(RETRIES_TIMEOUT_MS)
-    }
-  }
+  const result = saveWithComparison(await collect(config))
+  process.stdout.write(`${JSON.stringify(result)}\n`)
 }
 
-run().catch((error) => {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) run().catch((error) => {
   const result = {
     schemaVersion: 1,
     result: false,
