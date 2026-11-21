@@ -1,0 +1,9 @@
+[
+  { "ParameterKey": "RegionCode", "ParameterValue": "o" },
+  { "ParameterKey": "City", "ParameterValue": "м. Одеса" },
+  { "ParameterKey": "Street", "ParameterValue": "REPLACE_WITH_STREET" },
+  { "ParameterKey": "House", "ParameterValue": "REPLACE_WITH_HOUSE" },
+  { "ParameterKey": "TelegramChatId", "ParameterValue": "REPLACE_WITH_CHAT_ID" },
+  { "ParameterKey": "TelegramBotToken", "ParameterValue": "000000000:REPLACE_WITH_BOT_TOKEN" },
+  { "ParameterKey": "ScheduleState", "ParameterValue": "DISABLED" }
+]
