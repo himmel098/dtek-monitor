@@ -16,9 +16,27 @@ export async function collectHttp(config, request = fetch) {
   const page = await request(config.url, { signal: AbortSignal.timeout(15_000) })
   if (!page.ok) throw new Error(`DTEK page HTTP ${page.status}`)
   const html = await page.text()
-  const streets = assignment(html, 'streets')
-  const fact = assignment(html, 'fact')
-  const preset = assignment(html, 'preset')
+  let streets, fact, preset
+  try {
+    streets = assignment(html, 'streets')
+    fact = assignment(html, 'fact')
+    preset = assignment(html, 'preset')
+  } catch (error) {
+    const expectedPath = new URL(config.url).pathname
+    const finalPath = page.url ? new URL(page.url).pathname : null
+    const mediaType = page.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase()
+    console.warn('DTEK page parse failed', {
+      status: page.status,
+      redirected: page.redirected,
+      path: finalPath === expectedPath || finalPath === '/' ? finalPath : finalPath ? '[unexpected path]' : null,
+      contentType: ['text/html', 'application/json', 'text/plain', 'application/xhtml+xml'].includes(mediaType) ? mediaType : null,
+      bodyBytes: Buffer.byteLength(html),
+      markers: Object.fromEntries(['streets', 'fact', 'preset'].map((field) => [field, html.includes(`DisconSchedule.${field}`)])),
+    })
+    // JSON.parse errors may include excerpts from the response body.
+    if (error instanceof SyntaxError) throw new Error('DTEK page contains invalid schedule JSON')
+    throw error
+  }
   const city = selectName(config.city || 'Київ', Object.keys(streets), 'city')
   const street = selectName(config.street, streets[city], 'street')
   const endpoint = new URL(meta(html, 'ajaxUrl') ?? '/ua/ajax', config.url)
